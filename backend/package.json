@@ -7,16 +7,21 @@
     "dev": "nodemon server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["zktls", "reclaim", "nft", "social-proof"],
+  "keywords": [
+    "zktls",
+    "reclaim",
+    "nft",
+    "social-proof"
+  ],
   "author": "",
   "license": "ISC",
   "description": "Backend server for zkTLS Social Proof Pass verification and NFT minting",
   "dependencies": {
+    "@reclaimprotocol/js-sdk": "^4.5.1",
     "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "@reclaimprotocol/js-sdk": "^1.0.0",
+    "dotenv": "^16.4.0",
     "ethers": "^6.13.0",
-    "dotenv": "^16.4.0"
+    "express": "^5.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"

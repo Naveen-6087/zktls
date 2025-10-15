@@ -4,12 +4,21 @@ const { ReclaimProofRequest, verifyProof } = require('@reclaimprotocol/js-sdk');
 const { ethers } = require('ethers');
 require('dotenv').config();
 
+// Debug: Check if ReclaimProofRequest is properly imported
+console.log('Import check - ReclaimProofRequest:', typeof ReclaimProofRequest);
+console.log('Import check - ReclaimProofRequest methods:', ReclaimProofRequest ? Object.getOwnPropertyNames(ReclaimProofRequest) : 'undefined');
+
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 app.use(express.text({ type: '*/*', limit: '50mb' }));
+
+// Simple root route to test if routes are working
+app.get('/', (req, res) => {
+  res.json({ message: 'Backend server is running', status: 'ok' });
+});
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
@@ -66,10 +75,56 @@ const NFT_CONTRACT_ABI = [
 ];
 
 /**
+ * Route to get configuration status and setup instructions
+ * GET /config-status
+ */
+app.get('/config-status', (req, res) => {
+  const configStatus = {};
+  let hasAnyConfigured = false;
+
+  Object.keys(PROVIDERS).forEach(provider => {
+    const { APP_ID, APP_SECRET, PROVIDER_ID } = PROVIDERS[provider];
+    const isConfigured = APP_ID && APP_SECRET && PROVIDER_ID && 
+                        !APP_ID.includes('your_') && 
+                        !APP_SECRET.includes('your_') && 
+                        !PROVIDER_ID.includes('your_');
+    
+    configStatus[provider] = {
+      configured: isConfigured,
+      hasPlaceholders: APP_ID?.includes('your_') || APP_SECRET?.includes('your_') || PROVIDER_ID?.includes('your_')
+    };
+    
+    if (isConfigured) hasAnyConfigured = true;
+  });
+
+  res.json({
+    providers: configStatus,
+    hasAnyConfigured,
+    setupInstructions: {
+      message: "To configure providers, visit https://dev.reclaimprotocol.org/ and update your .env file",
+      example: {
+        "GITHUB_APP_ID": "your_actual_app_id",
+        "GITHUB_APP_SECRET": "your_actual_app_secret", 
+        "GITHUB_PROVIDER_ID": "your_actual_provider_id"
+      }
+    }
+  });
+});
+
+/**
+ * Test route
+ */
+app.get('/test', (req, res) => {
+  console.log('Test route hit!');
+  res.json({ message: 'Test route working', reclaimType: typeof ReclaimProofRequest });
+});
+
+/**
  * Route to generate SDK configuration for a specific provider
  * GET /generate-config?provider=github&address=0x123...
  */
 app.get('/generate-config', async (req, res) => {
+  console.log('Route handler called - ReclaimProofRequest type:', typeof ReclaimProofRequest);
   const { provider, address } = req.query;
 
   if (!provider || !PROVIDERS[provider]) {
@@ -78,33 +133,34 @@ app.get('/generate-config', async (req, res) => {
 
   const { APP_ID, APP_SECRET, PROVIDER_ID } = PROVIDERS[provider];
 
-  if (!APP_ID || !APP_SECRET || !PROVIDER_ID) {
+  // Check if credentials are properly configured
+  if (!APP_ID || !APP_SECRET || !PROVIDER_ID || 
+      APP_ID.includes('your_') || APP_SECRET.includes('your_') || PROVIDER_ID.includes('your_')) {
     return res.status(500).json({ 
       error: 'Provider not configured', 
-      message: `Please set environment variables for ${provider}` 
+      message: `Please configure ${provider} credentials in your .env file. Get them from https://dev.reclaimprotocol.org/`,
+      details: `Missing or placeholder values for ${provider.toUpperCase()}_APP_ID, ${provider.toUpperCase()}_APP_SECRET, or ${provider.toUpperCase()}_PROVIDER_ID`
     });
   }
 
   try {
+    console.log('Attempting to initialize ReclaimProofRequest with:', { APP_ID, APP_SECRET, PROVIDER_ID });
+    console.log('ReclaimProofRequest type:', typeof ReclaimProofRequest);
+    console.log('ReclaimProofRequest:', ReclaimProofRequest);
+    
     const reclaimProofRequest = await ReclaimProofRequest.init(
       APP_ID, 
       APP_SECRET, 
       PROVIDER_ID
     );
     
+    console.log('ReclaimProofRequest initialized successfully');
+    
     // Set callback URL for this specific provider
     reclaimProofRequest.setAppCallbackUrl(`${BASE_URL}/receive-proofs/${provider}`);
     
-    // Add context with user's wallet address if provided
-    if (address) {
-      reclaimProofRequest.setContext(
-        JSON.stringify({
-          contextAddress: address,
-          contextMessage: `Verification for ${provider}`,
-          timestamp: Date.now()
-        })
-      );
-    }
+    // Note: setContext method not available in SDK v4.5.1, skipping context setting
+    // Context can be handled during verification instead
     
     const requestUrl = await reclaimProofRequest.getRequestUrl();
     const reclaimProofRequestConfig = reclaimProofRequest.toJsonString();

@@ -42,14 +42,27 @@ const verificationSessions = new Map();
 const verificationProofs = new Map();
 
 // Blockchain configuration
-const NETWORK_RPC = process.env.RPC_URL || "https://polygon-rpc.com";
+const NETWORK_RPC = process.env.RPC_URL;
 const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 const NFT_CONTRACT_ADDRESS = process.env.NFT_CONTRACT_ADDRESS;
 
-// NFT Contract ABI (simplified - only functions we need)
+// NFT Contract ABI (simplified for backend use)
 const NFT_CONTRACT_ABI = [
-  "function mintSocialProofPass(address to, string[] memory providers, bytes memory proofData) public returns (uint256)",
-  "event SocialProofPassMinted(address indexed to, uint256 indexed tokenId, string[] providers, uint256 timestamp)"
+  // Mint function for backend (off-chain verification)
+  "function mintSocialProofPass(address to, string[] memory providers, bytes memory proofData) external returns (uint256)",
+  
+  // Check if user has already minted
+  "function hasAlreadyMinted(address user) external view returns (bool)",
+  
+  // Get social proof data
+  "function getSocialProof(uint256 tokenId) external view returns (address holder, string[] memory verifiedProviders, uint8 verificationCount, uint256 timestamp, bool verified)",
+  
+  // Token URI
+  "function tokenURI(uint256 tokenId) external view returns (string memory)",
+  
+  // Events
+  "event SocialProofPassMinted(address indexed to, uint256 indexed tokenId, string[] providers, uint256 timestamp)",
+  "event ProofVerifiedOnChain(address indexed user, uint256 indexed tokenId, string provider, uint256 timestamp)"
 ];
 
 /**
@@ -328,18 +341,18 @@ app.post('/prepare-onchain-mint', async (req, res) => {
     // Transform Reclaim proofs for on-chain verification
     const transformedProofs = Object.values(reclaimProofs).map(proof => ({
       claimInfo: {
-        provider: proof.provider,
-        parameters: proof.parameters,
-        context: proof.context || ''
+        provider: proof.provider || "",
+        parameters: proof.parameters || "",
+        context: proof.context || ""
       },
       signedClaim: {
         claim: {
-          identifier: proof.identifier,
-          owner: proof.owner,
-          timestampS: proof.timestampS,
-          epoch: proof.epoch
+          identifier: proof.identifier || "0x0000000000000000000000000000000000000000000000000000000000000000",
+          owner: proof.owner || walletAddress,
+          timestampS: proof.timestampS || Math.floor(Date.now() / 1000),
+          epoch: proof.epoch || 1
         },
-        signatures: proof.signatures
+        signatures: proof.signatures || []
       }
     }));
 
@@ -347,13 +360,65 @@ app.post('/prepare-onchain-mint', async (req, res) => {
       transformedProofs,
       contractAddress: NFT_CONTRACT_ADDRESS,
       abi: NFT_CONTRACT_ABI,
-      verifiedProviders
+      verifiedProviders,
+      chainId: (await new ethers.JsonRpcProvider(NETWORK_RPC).getNetwork()).chainId
     });
 
   } catch (error) {
     console.error('Error preparing on-chain mint:', error);
     return res.status(500).json({ 
       error: 'Failed to prepare on-chain mint',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Route to test proof verification before on-chain submission
+ * POST /test-proof-verification
+ */
+app.post('/test-proof-verification', async (req, res) => {
+  const { proof } = req.body;
+
+  if (!proof || !NFT_CONTRACT_ADDRESS) {
+    return res.status(400).json({ error: 'Invalid request data or contract not configured' });
+  }
+
+  try {
+    const provider = new ethers.JsonRpcProvider(NETWORK_RPC);
+    const contract = new ethers.Contract(NFT_CONTRACT_ADDRESS, NFT_CONTRACT_ABI, provider);
+
+    // Transform single proof for testing
+    const transformedProof = {
+      claimInfo: {
+        provider: proof.provider || "",
+        parameters: proof.parameters || "",
+        context: proof.context || ""
+      },
+      signedClaim: {
+        claim: {
+          identifier: proof.identifier || "0x0000000000000000000000000000000000000000000000000000000000000000",
+          owner: proof.owner || "0x0000000000000000000000000000000000000000",
+          timestampS: proof.timestampS || Math.floor(Date.now() / 1000),
+          epoch: proof.epoch || 1
+        },
+        signatures: proof.signatures || []
+      }
+    };
+
+    // Test verification on contract
+    const [isValid, contextData] = await contract.verifyProofAndExtractData(transformedProof);
+
+    return res.json({
+      isValid,
+      contextData,
+      transformedProof
+    });
+
+  } catch (error) {
+    console.error('Error testing proof verification:', error);
+    return res.status(500).json({ 
+      error: 'Failed to test proof verification',
       details: error.message 
     });
   }

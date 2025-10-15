@@ -3,14 +3,24 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.js",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:ethereum": "hardhat run scripts/deploy.js --network ethereum",
+    "test": "hardhat test",
+    "verify": "hardhat verify --network sepolia"
   },
-  "keywords": [],
+  "keywords": ["hardhat", "solidity", "nft", "erc721", "zktls"],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Smart contracts for zkTLS Social Proof Pass NFT",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
     "hardhat": "^2.26.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.0",
+    "@reclaimprotocol/verifier-solidity-sdk": "^1.0.0",
+    "dotenv": "^16.4.0"
   }
 }

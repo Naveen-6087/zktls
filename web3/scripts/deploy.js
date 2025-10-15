@@ -38,16 +38,27 @@ async function main() {
   console.log("📝 Contract address:", contractAddress);
   console.log("🔍 Transaction hash:", socialProofPass.deploymentTransaction().hash);
   console.log("⛓️  Block number:", socialProofPass.deploymentTransaction().blockNumber);
+  
+  // Get Reclaim Protocol address from contract
+  const reclaimAddress = await socialProofPass.getReclaimAddress();
+  console.log("🔗 Reclaim Protocol address:", reclaimAddress);
 
   // Save deployment info
   const deploymentInfo = {
     network: hre.network.name,
     chainId: (await hre.ethers.provider.getNetwork()).chainId.toString(),
     contractAddress: contractAddress,
+    reclaimAddress: reclaimAddress,
     deployer: deployer.address,
     timestamp: new Date().toISOString(),
     transactionHash: socialProofPass.deploymentTransaction().hash,
-    blockNumber: socialProofPass.deploymentTransaction().blockNumber
+    blockNumber: socialProofPass.deploymentTransaction().blockNumber,
+    features: {
+      onChainVerification: true,
+      offChainVerification: true,
+      dynamicSVG: true,
+      reclaimIntegration: true
+    }
   };
 
   const deploymentsDir = path.join(__dirname, '..', 'deployments');
@@ -77,6 +88,10 @@ async function main() {
   console.log("4️⃣  Update backend/.env with:");
   console.log(`    RPC_URL=https://sepolia.infura.io/v3/YOUR-API-KEY`);
   console.log(`    NFT_CONTRACT_ADDRESS=${contractAddress}\n`);
+
+  console.log("5️⃣  Test on-chain verification:");
+  console.log(`    The contract supports both on-chain and off-chain verification modes`);
+  console.log(`    Reclaim Protocol address: ${reclaimAddress}\n`);
 
   console.log("✨ Deployment complete!\n");
 }

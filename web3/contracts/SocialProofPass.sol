@@ -13,38 +13,50 @@ import "@reclaimprotocol/verifier-solidity-sdk/contracts/Addresses.sol";
 /**
  * @title SocialProofPass
  * @dev NFT that represents verified social proofs using zkTLS technology
- * Supports both on-chain and off-chain verification modes
- * Each NFT certifies that the holder has verified their identity across multiple platforms
+ * Supports both on-chain and off-chain verification modes using Reclaim Protocol
  */
 contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     using Counters for Counters.Counter;
     using Strings for uint256;
 
     Counters.Counter private _tokenIdCounter;
+    
+    // Reclaim Protocol contract address
+    address public reclaimAddress;
 
     // Struct to store verification data
     struct SocialProof {
         address holder;
         string[] verifiedProviders;
-        bytes proofData;
-        uint256 timestamp;
         uint8 verificationCount;
+        uint256 timestamp;
+        bool verified;
     }
 
     // Mapping from tokenId to social proof data
     mapping(uint256 => SocialProof) public socialProofs;
-
+    
     // Mapping from address to their token IDs
     mapping(address => uint256[]) public holderTokens;
-
-    // Mapping to track if a user has already minted (optional: enforce one per address)
+    
+    // Mapping to track if a user has already minted (optional: can be disabled)
     mapping(address => bool) public hasMinted;
+    
+    // Mapping to track supported provider IDs
+    mapping(string => bool) public supportedProviders;
 
     // Events
     event SocialProofPassMinted(
         address indexed to, 
-        uint256 indexed tokenId, 
+        uint256 indexed tokenId,
         string[] providers,
+        uint256 timestamp
+    );
+
+    event ProofVerifiedOnChain(
+        address indexed user,
+        uint256 indexed tokenId,
+        string provider,
         uint256 timestamp
     );
 
@@ -54,113 +66,269 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         uint256 timestamp
     );
 
-    constructor() ERC721("SocialProofPass", "SPP") Ownable(msg.sender) {}
+    constructor() ERC721("SocialProofPass", "SPP") Ownable(msg.sender) {
+        // Set Reclaim Protocol contract address for Sepolia testnet
+        reclaimAddress = Addresses.SEPOLIA;
+        
+        // Initialize supported providers
+        supportedProviders["github"] = true;
+        supportedProviders["gmail"] = true;
+        supportedProviders["linkedin"] = true;
+        supportedProviders["twitter"] = true;
+    }
 
     /**
-     * @dev Mint a new Social Proof Pass NFT
-     * @param to Address to mint the NFT to
-     * @param providers Array of verified provider names (e.g., ["github", "gmail"])
-     * @param proofData Encoded proof data from zkTLS verification
+     * @dev Verify a single proof using Reclaim Protocol
+     * Internal function that handles the actual verification
+     */
+    function _verifyReclaimProof(Reclaim.Proof memory proof) internal view {
+        // Call Reclaim Protocol's verifyProof function
+        Reclaim(reclaimAddress).verifyProof(proof);
+        // If this doesn't revert, the proof is valid
+    }
+
+    /**
+     * @dev Extract context field from proof using Reclaim's utility
+     * This can be used to extract provider-specific data
+     */
+    function extractFieldFromContext(string memory data, string memory target)
+        public pure returns (string memory) {
+        // Implementation of context field extraction
+        // This should match Reclaim's utility function
+        bytes memory dataBytes = bytes(data);
+        bytes memory targetBytes = bytes(target);
+        
+        if (dataBytes.length < targetBytes.length) {
+            return "";
+        }
+        
+        for (uint i = 0; i <= dataBytes.length - targetBytes.length; i++) {
+            bool found = true;
+            for (uint j = 0; j < targetBytes.length; j++) {
+                if (dataBytes[i + j] != targetBytes[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            
+            if (found) {
+                // Found the target, now extract the value
+                uint start = i + targetBytes.length;
+                uint end = start;
+                
+                // Find the end of the value (until next quote)
+                while (end < dataBytes.length && dataBytes[end] != '"') {
+                    end++;
+                }
+                
+                bytes memory result = new bytes(end - start);
+                for (uint k = 0; k < end - start; k++) {
+                    result[k] = dataBytes[start + k];
+                }
+                
+                return string(result);
+            }
+        }
+        
+        return "";
+    }
+
+    /**
+     * @dev Mint NFT with on-chain proof verification
+     * Users can call this directly with their zkTLS proofs
+     */
+    function mintWithProofVerification(
+        Reclaim.Proof[] memory proofs,
+        string[] memory providers
+    ) external returns (uint256) {
+        require(proofs.length > 0, "At least one proof required");
+        require(proofs.length == providers.length, "Proofs and providers length mismatch");
+        require(!hasMinted[msg.sender], "Already minted");
+
+        // Verify each proof on-chain using Reclaim Protocol
+        for (uint i = 0; i < proofs.length; i++) {
+            require(supportedProviders[providers[i]], "Unsupported provider");
+            
+            // Verify the proof using Reclaim Protocol
+            _verifyReclaimProof(proofs[i]);
+            
+            // Optional: Extract and validate context data
+            // For example, verify that the proof context contains expected user data
+            // string memory contextAddress = extractFieldFromContext(
+            //     proofs[i].claimInfo.context, 
+            //     '"contextAddress":"'
+            // );
+            // require(
+            //     keccak256(abi.encodePacked(contextAddress)) == keccak256(abi.encodePacked(msg.sender)),
+            //     "Context address mismatch"
+            // );
+            
+            emit ProofVerifiedOnChain(msg.sender, _tokenIdCounter.current(), providers[i], block.timestamp);
+        }
+
+        // Mint the NFT
+        uint256 tokenId = _tokenIdCounter.current();
+        _tokenIdCounter.increment();
+        
+        _safeMint(msg.sender, tokenId);
+        
+        // Store social proof data
+        socialProofs[tokenId] = SocialProof({
+            holder: msg.sender,
+            verifiedProviders: providers,
+            verificationCount: uint8(providers.length),
+            timestamp: block.timestamp,
+            verified: true
+        });
+        
+        holderTokens[msg.sender].push(tokenId);
+        hasMinted[msg.sender] = true;
+        
+        // Generate and set token URI
+        string memory uri = generateTokenURI(tokenId);
+        _setTokenURI(tokenId, uri);
+
+        emit SocialProofPassMinted(msg.sender, tokenId, providers, block.timestamp);
+        
+        return tokenId;
+    }
+
+    /**
+     * @dev Mint NFT through backend verification (off-chain mode)
+     * Only owner (backend) can call this after verifying proofs off-chain
      */
     function mintSocialProofPass(
         address to,
         string[] memory providers,
         bytes memory proofData
-    ) public onlyOwner returns (uint256) {
+    ) external onlyOwner returns (uint256) {
         require(providers.length > 0, "At least one provider required");
-        require(to != address(0), "Invalid recipient address");
+        require(!hasMinted[to], "Already minted");
 
         uint256 tokenId = _tokenIdCounter.current();
         _tokenIdCounter.increment();
-
+        
+        _safeMint(to, tokenId);
+        
         // Store social proof data
         socialProofs[tokenId] = SocialProof({
             holder: to,
             verifiedProviders: providers,
-            proofData: proofData,
+            verificationCount: uint8(providers.length),
             timestamp: block.timestamp,
-            verificationCount: uint8(providers.length)
+            verified: true
         });
-
-        // Track holder's tokens
+        
         holderTokens[to].push(tokenId);
         hasMinted[to] = true;
-
-        // Mint the NFT
-        _safeMint(to, tokenId);
-
-        // Set token URI with dynamic metadata
+        
+        // Generate and set token URI
         string memory uri = generateTokenURI(tokenId);
         _setTokenURI(tokenId, uri);
 
         emit SocialProofPassMinted(to, tokenId, providers, block.timestamp);
-
+        
         return tokenId;
     }
 
     /**
-     * @dev Add more verified providers to an existing Social Proof Pass
-     * @param tokenId The token to update
-     * @param newProviders Additional providers to add
-     * @param newProofData Additional proof data
+     * @dev Add more verified providers to existing token (on-chain verification)
      */
-    function addVerifiedProviders(
+    function addProvidersWithVerification(
         uint256 tokenId,
-        string[] memory newProviders,
-        bytes memory newProofData
-    ) public onlyOwner {
+        Reclaim.Proof[] memory newProofs,
+        string[] memory newProviders
+    ) external {
         require(_exists(tokenId), "Token does not exist");
-        require(newProviders.length > 0, "No providers to add");
+        require(ownerOf(tokenId) == msg.sender, "Not token owner");
+        require(newProofs.length == newProviders.length, "Arrays length mismatch");
 
+        // Verify new proofs
+        for (uint i = 0; i < newProofs.length; i++) {
+            require(supportedProviders[newProviders[i]], "Unsupported provider");
+            _verifyReclaimProof(newProofs[i]);
+            
+            emit ProofVerifiedOnChain(msg.sender, tokenId, newProviders[i], block.timestamp);
+        }
+
+        // Update social proof data
         SocialProof storage proof = socialProofs[tokenId];
-
-        // Add new providers
+        
+        // Add new providers to existing ones
         for (uint i = 0; i < newProviders.length; i++) {
             proof.verifiedProviders.push(newProviders[i]);
         }
-
-        // Update proof data (append)
-        proof.proofData = abi.encodePacked(proof.proofData, newProofData);
+        
         proof.verificationCount = uint8(proof.verifiedProviders.length);
+        proof.timestamp = block.timestamp;
 
         // Update token URI
-        string memory uri = generateTokenURI(tokenId);
-        _setTokenURI(tokenId, uri);
+        string memory newUri = generateTokenURI(tokenId);
+        _setTokenURI(tokenId, newUri);
 
         emit ProofDataUpdated(tokenId, newProviders, block.timestamp);
     }
 
     /**
+     * @dev Verify a proof and extract provider data (view function for testing)
+     */
+    function verifyProofAndExtractData(Reclaim.Proof memory proof) 
+        external view returns (bool isValid, string memory contextData) {
+        try this.testVerifyProof(proof) {
+            return (true, proof.claimInfo.context);
+        } catch {
+            return (false, "");
+        }
+    }
+
+    /**
+     * @dev Test proof verification (external for try-catch)
+     */
+    function testVerifyProof(Reclaim.Proof memory proof) external view {
+        _verifyReclaimProof(proof);
+    }
+
+    /**
+     * @dev Add supported provider (only owner)
+     */
+    function addSupportedProvider(string memory provider) external onlyOwner {
+        supportedProviders[provider] = true;
+    }
+
+    /**
+     * @dev Remove supported provider (only owner)
+     */
+    function removeSupportedProvider(string memory provider) external onlyOwner {
+        supportedProviders[provider] = false;
+    }
+
+    /**
+     * @dev Update Reclaim Protocol contract address (only owner)
+     */
+    function updateReclaimAddress(address newReclaimAddress) external onlyOwner {
+        reclaimAddress = newReclaimAddress;
+    }
+
+    /**
      * @dev Generate dynamic token URI with on-chain SVG metadata
-     * @param tokenId The token ID
      */
     function generateTokenURI(uint256 tokenId) internal view returns (string memory) {
         require(_exists(tokenId), "Token does not exist");
-
+        
         SocialProof memory proof = socialProofs[tokenId];
         
-        // Generate SVG image
         string memory svg = generateSVG(tokenId, proof);
+        string memory attributes = generateAttributes(proof);
         
-        // Build metadata JSON
         string memory json = Base64.encode(
-            bytes(
-                string(
-                    abi.encodePacked(
-                        '{"name": "Social Proof Pass #',
-                        tokenId.toString(),
-                        '", "description": "A verified social proof certificate demonstrating identity across ',
-                        uint256(proof.verificationCount).toString(),
-                        ' platforms using zkTLS technology.", "image": "data:image/svg+xml;base64,',
-                        Base64.encode(bytes(svg)),
-                        '", "attributes": [',
-                        generateAttributes(proof),
-                        ']}'
-                    )
-                )
-            )
+            bytes(string(abi.encodePacked(
+                '{"name": "Social Proof Pass #', tokenId.toString(), '",',
+                '"description": "A verified social proof pass certifying identity across multiple platforms using zkTLS technology.",',
+                '"image": "data:image/svg+xml;base64,', Base64.encode(bytes(svg)), '",',
+                '"attributes": [', attributes, ']}'
+            )))
         );
-
+        
         return string(abi.encodePacked("data:application/json;base64,", json));
     }
 
@@ -170,113 +338,63 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     function generateSVG(uint256 tokenId, SocialProof memory proof) internal pure returns (string memory) {
         string memory providers = "";
         
-        // Build provider badges
-        for (uint i = 0; i < proof.verifiedProviders.length && i < 6; i++) {
-            providers = string(
-                abi.encodePacked(
-                    providers,
-                    '<rect x="',
-                    uint256(50 + (i * 70)).toString(),
-                    '" y="200" width="60" height="30" rx="15" fill="#8B5CF6"/>',
-                    '<text x="',
-                    uint256(80 + (i * 70)).toString(),
-                    '" y="220" font-family="Arial" font-size="12" fill="white" text-anchor="middle">',
-                    getProviderIcon(proof.verifiedProviders[i]),
-                    '</text>'
-                )
-            );
+        for (uint i = 0; i < proof.verifiedProviders.length; i++) {
+            if (i > 0) providers = string(abi.encodePacked(providers, ", "));
+            providers = string(abi.encodePacked(providers, capitalizeFirst(proof.verifiedProviders[i])));
         }
-
-        return string(
-            abi.encodePacked(
-                '<svg width="500" height="500" xmlns="http://www.w3.org/2000/svg">',
-                '<defs>',
-                '<linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">',
-                '<stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />',
-                '<stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />',
-                '</linearGradient>',
-                '</defs>',
-                '<rect width="500" height="500" fill="url(#grad1)"/>',
-                '<circle cx="250" cy="100" r="40" fill="#FBBF24" opacity="0.3"/>',
-                '<text x="250" y="110" font-family="Arial" font-size="36" font-weight="bold" fill="white" text-anchor="middle">',
-                unicode"🛡️",
-                '</text>',
-                '<text x="250" y="160" font-family="Arial" font-size="28" font-weight="bold" fill="white" text-anchor="middle">Social Proof Pass</text>',
-                '<text x="250" y="185" font-family="Arial" font-size="14" fill="#E9D5FF" text-anchor="middle">#',
-                tokenId.toString(),
-                '</text>',
-                providers,
-                '<rect x="50" y="260" width="400" height="80" rx="10" fill="rgba(255,255,255,0.1)"/>',
-                '<text x="250" y="290" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Verified Platforms: ',
-                uint256(proof.verificationCount).toString(),
-                '</text>',
-                '<text x="250" y="320" font-family="Arial" font-size="12" fill="#C4B5FD" text-anchor="middle">zkTLS Verified</text>',
-                '<text x="250" y="380" font-family="Arial" font-size="10" fill="#A78BFA" text-anchor="middle">',
-                addressToString(proof.holder),
-                '</text>',
-                '<text x="250" y="450" font-family="Arial" font-size="10" fill="#DDD6FE" text-anchor="middle">',
-                'Issued: Block ',
-                uint256(proof.timestamp).toString(),
-                '</text>',
-                '</svg>'
-            )
-        );
-    }
-
-    /**
-     * @dev Get emoji icon for provider
-     */
-    function getProviderIcon(string memory provider) internal pure returns (string memory) {
-        bytes32 providerHash = keccak256(bytes(provider));
         
-        if (providerHash == keccak256(bytes("github"))) return unicode"⚡";
-        if (providerHash == keccak256(bytes("gmail"))) return unicode"📧";
-        if (providerHash == keccak256(bytes("linkedin"))) return unicode"💼";
-        if (providerHash == keccak256(bytes("twitter"))) return unicode"🐦";
-        
-        return unicode"✓";
+        return string(abi.encodePacked(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600">',
+            '<defs>',
+            '<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">',
+            '<stop offset="0%" style="stop-color:#667eea"/>',
+            '<stop offset="100%" style="stop-color:#764ba2"/>',
+            '</linearGradient>',
+            '</defs>',
+            '<rect width="400" height="600" fill="url(#bg)"/>',
+            '<rect x="20" y="20" width="360" height="560" rx="20" fill="#ffffff" opacity="0.1"/>',
+            '<text x="200" y="80" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="24" font-weight="bold">Social Proof Pass</text>',
+            '<text x="200" y="120" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="16">#', tokenId.toString(), '</text>',
+            '<circle cx="200" cy="200" r="60" fill="#ffffff" opacity="0.2"/>',
+            '<text x="200" y="210" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="40">V</text>',
+            '<text x="200" y="300" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="18" font-weight="bold">Verified Platforms</text>',
+            '<text x="200" y="340" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">', providers, '</text>',
+            '<text x="200" y="380" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="16">Count: ', proof.verificationCount.toString(), '</text>',
+            '<text x="200" y="420" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="12">Holder: ', addressToString(proof.holder), '</text>',
+            '<text x="200" y="460" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="12">zkTLS Verified</text>',
+            '<text x="200" y="520" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="10">Powered by Reclaim Protocol</text>',
+            '</svg>'
+        ));
     }
 
     /**
      * @dev Generate attributes for metadata
      */
     function generateAttributes(SocialProof memory proof) internal pure returns (string memory) {
-        string memory attributes = string(
-            abi.encodePacked(
-                '{"trait_type": "Verification Count", "value": ',
-                uint256(proof.verificationCount).toString(),
-                '}, {"trait_type": "Issue Date", "value": ',
-                uint256(proof.timestamp).toString(),
-                '}'
-            )
-        );
-
-        // Add provider attributes
+        string memory providers = "";
         for (uint i = 0; i < proof.verifiedProviders.length; i++) {
-            attributes = string(
-                abi.encodePacked(
-                    attributes,
-                    ', {"trait_type": "',
-                    capitalizeFirst(proof.verifiedProviders[i]),
-                    '", "value": "Verified"}'
-                )
-            );
+            if (i > 0) providers = string(abi.encodePacked(providers, ", "));
+            providers = string(abi.encodePacked(providers, proof.verifiedProviders[i]));
         }
-
-        return attributes;
+        
+        return string(abi.encodePacked(
+            '{"trait_type": "Verification Count", "value": ', proof.verificationCount.toString(), '},',
+            '{"trait_type": "Verified Platforms", "value": "', providers, '"},',
+            '{"trait_type": "Verification Method", "value": "zkTLS"},',
+            '{"trait_type": "Protocol", "value": "Reclaim"},',
+            '{"trait_type": "Verification Status", "value": "', proof.verified ? 'Verified' : 'Pending', '"}'
+        ));
     }
 
     /**
-     * @dev Capitalize first letter of string
+     * @dev Utility functions
      */
     function capitalizeFirst(string memory str) internal pure returns (string memory) {
         bytes memory strBytes = bytes(str);
-        if (strBytes.length == 0) return str;
+        if (strBytes.length == 0) return "";
         
         bytes memory result = new bytes(strBytes.length);
-        result[0] = bytes1(uint8(strBytes[0]) >= 97 && uint8(strBytes[0]) <= 122 
-            ? uint8(strBytes[0]) - 32 
-            : uint8(strBytes[0]));
+        result[0] = bytes1(uint8(strBytes[0]) >= 97 && uint8(strBytes[0]) <= 122 ? uint8(strBytes[0]) - 32 : uint8(strBytes[0]));
         
         for (uint i = 1; i < strBytes.length; i++) {
             result[i] = strBytes[i];
@@ -285,9 +403,6 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         return string(result);
     }
 
-    /**
-     * @dev Convert address to string
-     */
     function addressToString(address _addr) internal pure returns (string memory) {
         bytes32 value = bytes32(uint256(uint160(_addr)));
         bytes memory alphabet = "0123456789abcdef";
@@ -296,8 +411,8 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         str[1] = 'x';
         
         for (uint i = 0; i < 20; i++) {
-            str[2 + i * 2] = alphabet[uint8(value[i + 12] >> 4)];
-            str[3 + i * 2] = alphabet[uint8(value[i + 12] & 0x0f)];
+            str[2+i*2] = alphabet[uint(uint8(value[i + 12] >> 4))];
+            str[3+i*2] = alphabet[uint(uint8(value[i + 12] & 0x0f))];
         }
         
         return string(str);
@@ -309,37 +424,37 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     function getSocialProof(uint256 tokenId) external view returns (
         address holder,
         string[] memory verifiedProviders,
+        uint8 verificationCount,
         uint256 timestamp,
-        uint8 verificationCount
+        bool verified
     ) {
         require(_exists(tokenId), "Token does not exist");
         SocialProof memory proof = socialProofs[tokenId];
-        
-        return (
-            proof.holder,
-            proof.verifiedProviders,
-            proof.timestamp,
-            proof.verificationCount
-        );
+        return (proof.holder, proof.verifiedProviders, proof.verificationCount, proof.timestamp, proof.verified);
     }
 
     /**
      * @dev Get all tokens owned by an address
      */
-    function getTokensByHolder(address holder) external view returns (uint256[] memory) {
-        return holderTokens[holder];
+    function getTokensByOwner(address owner) external view returns (uint256[] memory) {
+        return holderTokens[owner];
     }
 
     /**
-     * @dev Check if an address has a Social Proof Pass
+     * @dev Check if an address has already minted
      */
-    function hasProofPass(address holder) external view returns (bool) {
-        return hasMinted[holder];
+    function hasAlreadyMinted(address user) external view returns (bool) {
+        return hasMinted[user];
     }
 
     /**
-     * @dev Override functions for ERC721URIStorage
+     * @dev Get Reclaim Protocol contract address
      */
+    function getReclaimAddress() external view returns (address) {
+        return reclaimAddress;
+    }
+
+    // Required overrides
     function _burn(uint256 tokenId) internal override(ERC721, ERC721URIStorage) {
         super._burn(tokenId);
     }

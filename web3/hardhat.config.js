@@ -41,12 +41,16 @@ module.exports = {
     },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "https://sepolia.infura.io/v3/de5e935616e04fd4bc801b419b7d580e",
-      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      accounts: process.env.DEPLOYER_PRIVATE_KEY && process.env.DEPLOYER_PRIVATE_KEY !== "your_private_key_here" 
+        ? [process.env.DEPLOYER_PRIVATE_KEY] 
+        : [],
       chainId: 11155111
     },
     ethereum: {
       url: process.env.ETHEREUM_RPC_URL || "",
-      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      accounts: process.env.DEPLOYER_PRIVATE_KEY && process.env.DEPLOYER_PRIVATE_KEY !== "your_private_key_here" 
+        ? [process.env.DEPLOYER_PRIVATE_KEY] 
+        : [],
       chainId: 1
     }
   },

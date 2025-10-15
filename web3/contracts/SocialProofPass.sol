@@ -1,50 +1,20 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.4;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "@openzeppelin/contracts/utils/Base64.sol";
-
-/**
- * @dev Interface for Reclaim Protocol verification
- * This allows us to interact with Reclaim without importing their contracts
- */
-interface IReclaim {
-    struct ClaimInfo {
-        string provider;
-        string parameters;
-        string context;
-    }
-    
-    struct SignedClaim {
-        Claim claim;
-        bytes[] signatures;
-    }
-    
-    struct Claim {
-        bytes32 identifier;
-        address owner;
-        uint32 timestampS;
-        uint32 epoch;
-    }
-    
-    struct Proof {
-        ClaimInfo claimInfo;
-        SignedClaim signedClaim;
-    }
-    
-    function verifyProof(Proof memory proof) external view;
-}
+import '@reclaimprotocol/verifier-solidity-sdk/contracts/Reclaim.sol';
+import '@reclaimprotocol/verifier-solidity-sdk/contracts/Claims.sol';
+import '@reclaimprotocol/verifier-solidity-sdk/contracts/Addresses.sol';
 
 /**
  * @title SocialProofPass
  * @dev NFT that represents verified social proofs using zkTLS technology
  * Supports both on-chain and off-chain verification modes using Reclaim Protocol
  */
-contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
+contract SocialProofPass is ERC721, Ownable {
     using Counters for Counters.Counter;
     using Strings for uint256;
 
@@ -97,7 +67,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
 
     constructor() ERC721("SocialProofPass", "SPP") Ownable() {
         // Set Reclaim Protocol contract address for Sepolia testnet
-        reclaimAddress = 0xAe94FB09711e1c6B057853a515483792d8e474d0;
+        reclaimAddress = Addresses.ETHEREUM_SEPOLIA;
         
         // Initialize supported providers
         supportedProviders["github"] = true;
@@ -110,9 +80,9 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      * @dev Verify a single proof using Reclaim Protocol
      * Internal function that handles the actual verification
      */
-    function _verifyReclaimProof(IReclaim.Proof memory proof) internal view {
+    function _verifyReclaimProof(Reclaim.Proof memory proof) internal view {
         // Call Reclaim Protocol's verifyProof function
-        IReclaim(reclaimAddress).verifyProof(proof);
+        Reclaim(reclaimAddress).verifyProof(proof);
         // If this doesn't revert, the proof is valid
     }
 
@@ -167,7 +137,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      * Users can call this directly with their zkTLS proofs
      */
     function mintWithProofVerification(
-        IReclaim.Proof[] memory proofs,
+        Reclaim.Proof[] memory proofs,
         string[] memory providers
     ) external returns (uint256) {
         require(proofs.length > 0, "At least one proof required");
@@ -212,10 +182,6 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         
         holderTokens[msg.sender].push(tokenId);
         hasMinted[msg.sender] = true;
-        
-        // Generate and set token URI
-        string memory uri = generateTokenURI(tokenId);
-        _setTokenURI(tokenId, uri);
 
         emit SocialProofPassMinted(msg.sender, tokenId, providers, block.timestamp);
         
@@ -250,10 +216,6 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         
         holderTokens[to].push(tokenId);
         hasMinted[to] = true;
-        
-        // Generate and set token URI
-        string memory uri = generateTokenURI(tokenId);
-        _setTokenURI(tokenId, uri);
 
         emit SocialProofPassMinted(to, tokenId, providers, block.timestamp);
         
@@ -265,7 +227,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      */
     function addProvidersWithVerification(
         uint256 tokenId,
-        IReclaim.Proof[] memory newProofs,
+        Reclaim.Proof[] memory newProofs,
         string[] memory newProviders
     ) external {
         require(_exists(tokenId), "Token does not exist");
@@ -291,17 +253,13 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         proof.verificationCount = uint8(proof.verifiedProviders.length);
         proof.timestamp = block.timestamp;
 
-        // Update token URI
-        string memory newUri = generateTokenURI(tokenId);
-        _setTokenURI(tokenId, newUri);
-
         emit ProofDataUpdated(tokenId, newProviders, block.timestamp);
     }
 
     /**
      * @dev Verify a proof and extract provider data (view function for testing)
      */
-    function verifyProofAndExtractData(IReclaim.Proof memory proof) 
+    function verifyProofAndExtractData(Reclaim.Proof memory proof) 
         external view returns (bool isValid, string memory contextData) {
         try this.testVerifyProof(proof) {
             return (true, proof.claimInfo.context);
@@ -313,7 +271,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     /**
      * @dev Test proof verification (external for try-catch)
      */
-    function testVerifyProof(IReclaim.Proof memory proof) external view {
+    function testVerifyProof(Reclaim.Proof memory proof) external view {
         _verifyReclaimProof(proof);
     }
 
@@ -339,27 +297,24 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     }
 
     /**
-     * @dev Generate dynamic token URI with simple metadata
+     * @dev Generate simple token URI
      */
-    function generateTokenURI(uint256 tokenId) internal view returns (string memory) {
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
         require(_exists(tokenId), "Token does not exist");
         
         SocialProof memory proof = socialProofs[tokenId];
         
-        // Simple attributes without complex string operations
-        string memory json = Base64.encode(
-            bytes(string(abi.encodePacked(
-                '{"name": "Social Proof Pass #', Strings.toString(tokenId), '",',
-                '"description": "zkTLS verified social proof NFT",',
-                '"attributes": [',
-                '{"trait_type": "Count", "value": ', Strings.toString(proof.verificationCount), '},',
-                '{"trait_type": "Method", "value": "zkTLS"},',
-                '{"trait_type": "Status", "value": "Verified"}',
-                ']}'
-            )))
-        );
-        
-        return string(abi.encodePacked("data:application/json;base64,", json));
+        // Simple JSON metadata without Base64 encoding
+        return string(abi.encodePacked(
+            'data:application/json,',
+            '{"name": "Social Proof Pass #', Strings.toString(tokenId), '",',
+            '"description": "zkTLS verified social proof NFT",',
+            '"attributes": [',
+            '{"trait_type": "Count", "value": ', Strings.toString(proof.verificationCount), '},',
+            '{"trait_type": "Method", "value": "zkTLS"},',
+            '{"trait_type": "Status", "value": "Verified"}',
+            ']}'
+        ));
     }
 
     /**
@@ -396,18 +351,5 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      */
     function getReclaimAddress() external view returns (address) {
         return reclaimAddress;
-    }
-
-    // Required overrides
-    function _burn(uint256 tokenId) internal override(ERC721, ERC721URIStorage) {
-        super._burn(tokenId);
-    }
-
-    function tokenURI(uint256 tokenId) public view override(ERC721, ERC721URIStorage) returns (string memory) {
-        return super.tokenURI(tokenId);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view override(ERC721, ERC721URIStorage) returns (bool) {
-        return super.supportsInterface(interfaceId);
     }
 }

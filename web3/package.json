@@ -25,7 +25,7 @@
     "hardhat": "^2.26.3"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^4.9.6",
+    "@openzeppelin/contracts": "^4.3.0",
     "@reclaimprotocol/verifier-solidity-sdk": "^1.0.0",
     "dotenv": "^16.4.0"
   }

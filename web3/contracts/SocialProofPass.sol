@@ -5,10 +5,39 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
-import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "@reclaimprotocol/verifier-solidity-sdk/contracts/Reclaim.sol";
-import "@reclaimprotocol/verifier-solidity-sdk/contracts/Addresses.sol";
+import "@openzeppelin/contracts/utils/Base64.sol";
+
+/**
+ * @dev Interface for Reclaim Protocol verification
+ * This allows us to interact with Reclaim without importing their contracts
+ */
+interface IReclaim {
+    struct ClaimInfo {
+        string provider;
+        string parameters;
+        string context;
+    }
+    
+    struct SignedClaim {
+        Claim claim;
+        bytes[] signatures;
+    }
+    
+    struct Claim {
+        bytes32 identifier;
+        address owner;
+        uint32 timestampS;
+        uint32 epoch;
+    }
+    
+    struct Proof {
+        ClaimInfo claimInfo;
+        SignedClaim signedClaim;
+    }
+    
+    function verifyProof(Proof memory proof) external view;
+}
 
 /**
  * @title SocialProofPass
@@ -66,9 +95,9 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
         uint256 timestamp
     );
 
-    constructor() ERC721("SocialProofPass", "SPP") Ownable(msg.sender) {
+    constructor() ERC721("SocialProofPass", "SPP") Ownable() {
         // Set Reclaim Protocol contract address for Sepolia testnet
-        reclaimAddress = Addresses.SEPOLIA;
+        reclaimAddress = 0xAe94FB09711e1c6B057853a515483792d8e474d0;
         
         // Initialize supported providers
         supportedProviders["github"] = true;
@@ -81,9 +110,9 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      * @dev Verify a single proof using Reclaim Protocol
      * Internal function that handles the actual verification
      */
-    function _verifyReclaimProof(Reclaim.Proof memory proof) internal view {
+    function _verifyReclaimProof(IReclaim.Proof memory proof) internal view {
         // Call Reclaim Protocol's verifyProof function
-        Reclaim(reclaimAddress).verifyProof(proof);
+        IReclaim(reclaimAddress).verifyProof(proof);
         // If this doesn't revert, the proof is valid
     }
 
@@ -138,7 +167,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      * Users can call this directly with their zkTLS proofs
      */
     function mintWithProofVerification(
-        Reclaim.Proof[] memory proofs,
+        IReclaim.Proof[] memory proofs,
         string[] memory providers
     ) external returns (uint256) {
         require(proofs.length > 0, "At least one proof required");
@@ -200,7 +229,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     function mintSocialProofPass(
         address to,
         string[] memory providers,
-        bytes memory proofData
+        bytes memory /* proofData */
     ) external onlyOwner returns (uint256) {
         require(providers.length > 0, "At least one provider required");
         require(!hasMinted[to], "Already minted");
@@ -236,7 +265,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
      */
     function addProvidersWithVerification(
         uint256 tokenId,
-        Reclaim.Proof[] memory newProofs,
+        IReclaim.Proof[] memory newProofs,
         string[] memory newProviders
     ) external {
         require(_exists(tokenId), "Token does not exist");
@@ -272,7 +301,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     /**
      * @dev Verify a proof and extract provider data (view function for testing)
      */
-    function verifyProofAndExtractData(Reclaim.Proof memory proof) 
+    function verifyProofAndExtractData(IReclaim.Proof memory proof) 
         external view returns (bool isValid, string memory contextData) {
         try this.testVerifyProof(proof) {
             return (true, proof.claimInfo.context);
@@ -284,7 +313,7 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     /**
      * @dev Test proof verification (external for try-catch)
      */
-    function testVerifyProof(Reclaim.Proof memory proof) external view {
+    function testVerifyProof(IReclaim.Proof memory proof) external view {
         _verifyReclaimProof(proof);
     }
 
@@ -310,112 +339,27 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
     }
 
     /**
-     * @dev Generate dynamic token URI with on-chain SVG metadata
+     * @dev Generate dynamic token URI with simple metadata
      */
     function generateTokenURI(uint256 tokenId) internal view returns (string memory) {
         require(_exists(tokenId), "Token does not exist");
         
         SocialProof memory proof = socialProofs[tokenId];
         
-        string memory svg = generateSVG(tokenId, proof);
-        string memory attributes = generateAttributes(proof);
-        
+        // Simple attributes without complex string operations
         string memory json = Base64.encode(
             bytes(string(abi.encodePacked(
-                '{"name": "Social Proof Pass #', tokenId.toString(), '",',
-                '"description": "A verified social proof pass certifying identity across multiple platforms using zkTLS technology.",',
-                '"image": "data:image/svg+xml;base64,', Base64.encode(bytes(svg)), '",',
-                '"attributes": [', attributes, ']}'
+                '{"name": "Social Proof Pass #', Strings.toString(tokenId), '",',
+                '"description": "zkTLS verified social proof NFT",',
+                '"attributes": [',
+                '{"trait_type": "Count", "value": ', Strings.toString(proof.verificationCount), '},',
+                '{"trait_type": "Method", "value": "zkTLS"},',
+                '{"trait_type": "Status", "value": "Verified"}',
+                ']}'
             )))
         );
         
         return string(abi.encodePacked("data:application/json;base64,", json));
-    }
-
-    /**
-     * @dev Generate SVG image for the NFT
-     */
-    function generateSVG(uint256 tokenId, SocialProof memory proof) internal pure returns (string memory) {
-        string memory providers = "";
-        
-        for (uint i = 0; i < proof.verifiedProviders.length; i++) {
-            if (i > 0) providers = string(abi.encodePacked(providers, ", "));
-            providers = string(abi.encodePacked(providers, capitalizeFirst(proof.verifiedProviders[i])));
-        }
-        
-        return string(abi.encodePacked(
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600">',
-            '<defs>',
-            '<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">',
-            '<stop offset="0%" style="stop-color:#667eea"/>',
-            '<stop offset="100%" style="stop-color:#764ba2"/>',
-            '</linearGradient>',
-            '</defs>',
-            '<rect width="400" height="600" fill="url(#bg)"/>',
-            '<rect x="20" y="20" width="360" height="560" rx="20" fill="#ffffff" opacity="0.1"/>',
-            '<text x="200" y="80" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="24" font-weight="bold">Social Proof Pass</text>',
-            '<text x="200" y="120" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="16">#', tokenId.toString(), '</text>',
-            '<circle cx="200" cy="200" r="60" fill="#ffffff" opacity="0.2"/>',
-            '<text x="200" y="210" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="40">V</text>',
-            '<text x="200" y="300" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="18" font-weight="bold">Verified Platforms</text>',
-            '<text x="200" y="340" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">', providers, '</text>',
-            '<text x="200" y="380" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="16">Count: ', proof.verificationCount.toString(), '</text>',
-            '<text x="200" y="420" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="12">Holder: ', addressToString(proof.holder), '</text>',
-            '<text x="200" y="460" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="12">zkTLS Verified</text>',
-            '<text x="200" y="520" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="10">Powered by Reclaim Protocol</text>',
-            '</svg>'
-        ));
-    }
-
-    /**
-     * @dev Generate attributes for metadata
-     */
-    function generateAttributes(SocialProof memory proof) internal pure returns (string memory) {
-        string memory providers = "";
-        for (uint i = 0; i < proof.verifiedProviders.length; i++) {
-            if (i > 0) providers = string(abi.encodePacked(providers, ", "));
-            providers = string(abi.encodePacked(providers, proof.verifiedProviders[i]));
-        }
-        
-        return string(abi.encodePacked(
-            '{"trait_type": "Verification Count", "value": ', proof.verificationCount.toString(), '},',
-            '{"trait_type": "Verified Platforms", "value": "', providers, '"},',
-            '{"trait_type": "Verification Method", "value": "zkTLS"},',
-            '{"trait_type": "Protocol", "value": "Reclaim"},',
-            '{"trait_type": "Verification Status", "value": "', proof.verified ? 'Verified' : 'Pending', '"}'
-        ));
-    }
-
-    /**
-     * @dev Utility functions
-     */
-    function capitalizeFirst(string memory str) internal pure returns (string memory) {
-        bytes memory strBytes = bytes(str);
-        if (strBytes.length == 0) return "";
-        
-        bytes memory result = new bytes(strBytes.length);
-        result[0] = bytes1(uint8(strBytes[0]) >= 97 && uint8(strBytes[0]) <= 122 ? uint8(strBytes[0]) - 32 : uint8(strBytes[0]));
-        
-        for (uint i = 1; i < strBytes.length; i++) {
-            result[i] = strBytes[i];
-        }
-        
-        return string(result);
-    }
-
-    function addressToString(address _addr) internal pure returns (string memory) {
-        bytes32 value = bytes32(uint256(uint160(_addr)));
-        bytes memory alphabet = "0123456789abcdef";
-        bytes memory str = new bytes(42);
-        str[0] = '0';
-        str[1] = 'x';
-        
-        for (uint i = 0; i < 20; i++) {
-            str[2+i*2] = alphabet[uint(uint8(value[i + 12] >> 4))];
-            str[3+i*2] = alphabet[uint(uint8(value[i + 12] & 0x0f))];
-        }
-        
-        return string(str);
     }
 
     /**
@@ -465,12 +409,5 @@ contract SocialProofPass is ERC721, ERC721URIStorage, Ownable {
 
     function supportsInterface(bytes4 interfaceId) public view override(ERC721, ERC721URIStorage) returns (bool) {
         return super.supportsInterface(interfaceId);
-    }
-
-    /**
-     * @dev Check if token exists
-     */
-    function _exists(uint256 tokenId) internal view returns (bool) {
-        return _ownerOf(tokenId) != address(0);
     }
 }

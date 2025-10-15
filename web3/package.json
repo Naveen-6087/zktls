@@ -10,7 +10,13 @@
     "test": "hardhat test",
     "verify": "hardhat verify --network sepolia"
   },
-  "keywords": ["hardhat", "solidity", "nft", "erc721", "zktls"],
+  "keywords": [
+    "hardhat",
+    "solidity",
+    "nft",
+    "erc721",
+    "zktls"
+  ],
   "author": "",
   "license": "ISC",
   "description": "Smart contracts for zkTLS Social Proof Pass NFT",
@@ -19,7 +25,7 @@
     "hardhat": "^2.26.3"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^4.9.0",
+    "@openzeppelin/contracts": "^4.9.6",
     "@reclaimprotocol/verifier-solidity-sdk": "^1.0.0",
     "dotenv": "^16.4.0"
   }
